@@ -1,0 +1,211 @@
+name: Build sami branch
+
+on:
+  push:
+    branches:
+      - sami
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+    # The reusable ci.yml declares block-master-pr with `pull-requests: write`.
+    # GitHub validates a called workflow's permission requests at startup (before
+    # each job's `if`), so the caller must grant the union of every scope ci.yml
+    # requests or the whole run fails with a startup "workflow file issue".
+    permissions:
+      contents: write
+      pull-requests: write
+  version:
+    name: Compute version
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Sync version from latest release tag
+        run: |
+          LATEST_TAG=$(git describe --tags --match "v[0-9]*" --abbrev=0 2>/dev/null || echo "v0.0.0")
+          VERSION=${LATEST_TAG#v}
+          jq --arg v "$VERSION" '.version = $v' package.json > tmp && mv tmp package.json
+      - uses: sjawhar/.github/.github/actions/sami-version@v1
+        id: version
+        with:
+          source: bun
+      - name: Write job summary
+        if: always()
+        shell: bash
+        env:
+          JOB_SUMMARY_TITLE: Sami version
+          JOB_SUMMARY_STATUS: ${{ job.status }}
+          JOB_SUMMARY_DETAILS: |
+            - Syncs package.json from the latest stable release tag.
+            - Computes the fork release tag for this `sami` push.
+          JOB_SUMMARY_NEXT: Inspect the version sync and tag computation logs before rerunning the fork build.
+        run: GITHUB_STEP_SUMMARY="$GITHUB_STEP_SUMMARY" bash .github/scripts/write-job-summary.sh
+
+  build:
+    name: Build ${{ matrix.target }}
+    needs: [version, ci]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-x64
+            os: ubuntu-latest
+            bun_target: bun-linux-x64
+          - target: linux-arm64
+            os: ubuntu-latest
+            bun_target: bun-linux-arm64
+          - target: darwin-arm64
+            os: macos-latest
+            bun_target: bun-darwin-arm64
+          - target: darwin-x64
+            os: macos-latest
+            bun_target: bun-darwin-x64
+          - target: windows-x64
+            os: windows-latest
+            bun_target: bun-windows-x64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.12"
+      - name: Build lsp-tools-mcp submodule
+        run: npm ci && npm run build
+        working-directory: packages/lsp-tools-mcp
+      - run: bun install
+
+      - name: Patch version
+        shell: bash
+        run: |
+          TAG="${{ needs.version.outputs.tag }}"
+          VERSION="${TAG#v}"
+          jq --arg ver "$VERSION" '.version = $ver' package.json > package.json.tmp && mv package.json.tmp package.json
+
+      - name: Build main package
+        run: bun run build
+
+      - name: Compile standalone binary
+        shell: bash
+        run: |
+          bun build --compile --minify \
+            --target=${{ matrix.bun_target }} \
+            --outfile=oh-my-opencode \
+            packages/omo-opencode/src/cli/index.ts
+
+      - name: Package
+        id: package
+        shell: bash
+        env:
+          MATRIX_OS: ${{ matrix.os }}
+        run: |
+          TAG="${{ needs.version.outputs.tag }}"
+          NAME="oh-my-opencode-${TAG}-${{ matrix.target }}"
+          if [[ "$MATRIX_OS" == windows* ]]; then
+            7z a "${NAME}.zip" oh-my-opencode.exe
+            echo "asset=${NAME}.zip" >> "$GITHUB_OUTPUT"
+          else
+            tar czf "${NAME}.tar.gz" oh-my-opencode
+            echo "asset=${NAME}.tar.gz" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: oh-my-opencode-${{ matrix.target }}
+          path: ${{ steps.package.outputs.asset }}
+      - name: Write job summary
+        if: always()
+        shell: bash
+        env:
+          JOB_SUMMARY_TITLE: Sami binary build (${{ matrix.target }})
+          JOB_SUMMARY_STATUS: ${{ job.status }}
+          JOB_SUMMARY_DETAILS: |
+            - Builds the main package for `${{ matrix.target }}`.
+            - Compiles the standalone CLI with Bun target `${{ matrix.bun_target }}`.
+            - Uploads the packaged fork binary artifact.
+          JOB_SUMMARY_NEXT: Open the first failing build, compile, package, or artifact upload step for this target.
+        run: GITHUB_STEP_SUMMARY="$GITHUB_STEP_SUMMARY" bash .github/scripts/write-job-summary.sh
+
+  release:
+    name: Create release
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - uses: sjawhar/.github/.github/actions/sami-release@v1
+        with:
+          tag: ${{ needs.version.outputs.tag }}
+          files: artifacts/**/*
+      - name: Write job summary
+        if: always()
+        shell: bash
+        env:
+          JOB_SUMMARY_TITLE: Sami release
+          JOB_SUMMARY_STATUS: ${{ job.status }}
+          JOB_SUMMARY_DETAILS: |
+            - Downloads every fork binary artifact.
+            - Creates or updates the GitHub release for the computed `sami` tag.
+          JOB_SUMMARY_NEXT: Inspect artifact download and release action logs before rerunning the release job.
+        run: GITHUB_STEP_SUMMARY="$GITHUB_STEP_SUMMARY" bash .github/scripts/write-job-summary.sh
+
+  publish-npm:
+    name: Publish to npm
+    needs: [version, ci]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+      - name: Build lsp-tools-mcp submodule
+        run: npm ci && npm run build
+        working-directory: packages/lsp-tools-mcp
+      - run: bun install
+      - run: bun run build
+      - name: Patch package for fork publishing
+        run: |
+          TAG="${{ needs.version.outputs.tag }}"
+          VERSION="${TAG#v}"
+          jq --arg name "@sjawhar/oh-my-opencode" --arg ver "$VERSION" \
+            --arg repo "https://github.com/sjawhar/oh-my-opencode" \
+            '.name = $name | .version = $ver | .repository = {type: "git", url: $repo}' \
+            package.json > package.json.tmp
+          mv package.json.tmp package.json
+      - run: npm publish --access public --tag sami
+      - name: Write job summary
+        if: always()
+        shell: bash
+        env:
+          JOB_SUMMARY_TITLE: Sami npm publish
+          JOB_SUMMARY_STATUS: ${{ job.status }}
+          JOB_SUMMARY_DETAILS: |
+            - Builds the package used for fork npm publishing.
+            - Rewrites package metadata to `@sjawhar/oh-my-opencode`.
+            - Publishes the computed version with the `sami` npm tag.
+          JOB_SUMMARY_NEXT: Inspect build, package patch, and npm publish logs; repeated publish failures may mean the version already exists.
+        run: GITHUB_STEP_SUMMARY="$GITHUB_STEP_SUMMARY" bash .github/scripts/write-job-summary.sh

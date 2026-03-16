@@ -30,6 +30,7 @@ const workflowExpectations = [
   { path: ".github/workflows/lint-workflows.yml", jobs: ["actionlint"] },
   { path: ".github/workflows/package-labels.yml", jobs: ["ensure-labels", "label-pull-request", "label-issue"] },
   { path: ".github/workflows/publish-platform.yml", jobs: ["build", "publish"] },
+  { path: ".github/workflows/sami-build.yml", jobs: ["version", "build", "release", "publish-npm"] },
   {
     path: ".github/workflows/publish.yml",
     jobs: [
@@ -152,6 +153,17 @@ describe("GitHub workflow job summaries", () => {
         expect(hasSummaryWriter(jobSection), `${expectation.path} ${job} must write a job summary`).toBe(true)
       }
     }
+  })
+
+  test("#given the sami release job #when it writes the shared job summary #then the repository is checked out first", () => {
+    const workflow = readFileSync(".github/workflows/sami-build.yml", "utf8")
+    const releaseJob = sliceJob(workflow, "release")
+    const checkoutIndex = releaseJob.indexOf("uses: actions/checkout@v4")
+    const summaryScriptIndex = releaseJob.indexOf("bash .github/scripts/write-job-summary.sh")
+
+    expect(checkoutIndex).toBeGreaterThanOrEqual(0)
+    expect(summaryScriptIndex).toBeGreaterThanOrEqual(0)
+    expect(checkoutIndex).toBeLessThan(summaryScriptIndex)
   })
 
   test("#given a privileged publish summary #when it renders dispatch inputs #then raw inputs are passed through env", () => {

@@ -5,6 +5,7 @@ on:
     branches: [master, dev]
   pull_request:
     branches: [master, dev]
+  workflow_call:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -75,6 +76,8 @@ jobs:
 
   test:
     runs-on: ${{ matrix.os }}
+    # windows leg is informational: it must not block the sami release (upstream gates publish on ubuntu only)
+    continue-on-error: ${{ matrix.os == 'windows-latest' }}
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -328,6 +331,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   build:
+    if: github.event_name != 'workflow_call'
     runs-on: ubuntu-latest
     permissions:
       contents: read
