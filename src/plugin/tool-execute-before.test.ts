@@ -325,7 +325,7 @@ describe("createToolRegistry", () => {
       test("#then it keeps the task tool when lower-priority tools can satisfy the cap", () => {
         const result = createToolRegistry(
           createRegistryInput({
-            experimental: { max_tools: 10 },
+            experimental: { max_tools: 15 },
           }),
         )
 

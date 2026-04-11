@@ -31,6 +31,40 @@ function writePythonScript(dir: string, filename: string, content: string): stri
 	return scriptPath
 }
 
+function createSafeZipArchive(rootDir: string, sourceDir: string, archivePath: string): void {
+	const scriptPath = writePythonScript(
+		rootDir,
+		"make-safe-zip.py",
+			[
+				"import os",
+				"import stat",
+				"import sys",
+				"import zipfile",
+				"source_dir = sys.argv[1]",
+				"archive_path = sys.argv[2]",
+				"with zipfile.ZipFile(archive_path, 'w') as archive:",
+				"    for current_root, dir_names, file_names in os.walk(source_dir):",
+				"        dir_names.sort()",
+				"        file_names.sort()",
+				"        relative_root = os.path.relpath(current_root, source_dir)",
+				"        if relative_root != '.':",
+				"            archive.write(current_root, relative_root)",
+				"        for file_name in file_names:",
+				"            source_path = os.path.join(current_root, file_name)",
+				"            archive_name = os.path.relpath(source_path, source_dir)",
+				"            if os.path.islink(source_path):",
+				"                entry = zipfile.ZipInfo(archive_name)",
+				"                entry.create_system = 3",
+				"                entry.external_attr = (stat.S_IFLNK | 0o777) << 16",
+				"                archive.writestr(entry, os.readlink(source_path))",
+				"            else:",
+				"                archive.write(source_path, archive_name)",
+			].join("\n")
+	)
+
+	runCommand(`python3 "${scriptPath}" "${sourceDir}" "${archivePath}"`)
+}
+
 afterEach(() => {
 	for (const dir of testDirs.splice(0)) {
 		rmSync(dir, { recursive: true, force: true })
@@ -217,7 +251,7 @@ describe("archive extraction preflight", () => {
 		writeFileSync(join(sourceDir, "bin", "tool.txt"), "safe")
 		symlinkSync("tool.txt", join(sourceDir, "bin", "tool-link"))
 		runCommand(`tar -czf "${tarArchivePath}" -C "${sourceDir}" .`)
-		runCommand(`zip -qry "${zipArchivePath}" .`, sourceDir)
+		createSafeZipArchive(rootDir, sourceDir, zipArchivePath)
 
 		//#when
 		await extractTarGz(tarArchivePath, tarDestDir)

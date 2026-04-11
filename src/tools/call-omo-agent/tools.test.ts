@@ -524,6 +524,7 @@ describe("createCallOmoAgent", () => {
     //#then
     expect(result).toContain("background_task.maxDepth=3")
   })
+
 })
 
 export {}
