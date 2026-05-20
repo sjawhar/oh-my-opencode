@@ -16,6 +16,19 @@ import {
 import { prepareDelegateTaskArgs } from "./tool-argument-preparation"
 import { createDelegateTaskPresentation } from "./tool-description"
 
+async function loadNativeSkillInfos(
+  nativeSkills: DelegateTaskToolOptions["nativeSkills"] | undefined,
+): Promise<{ name: string; description: string; location: string }[]> {
+  if (!nativeSkills) return []
+  try {
+    const list = await nativeSkills.all()
+    return Array.isArray(list) ? list : []
+  } catch (err) {
+    log("[delegate-task] nativeSkills.all() failed; skipping native skills in <available_skills>", { error: String(err) })
+    return []
+  }
+}
+
 export { resolveCategoryConfig } from "./categories"
 export type { SyncSessionCreatedEvent, DelegateTaskToolOptions, BuildSystemContentInput } from "./types"
 export { buildSystemContent, buildTaskPrompt } from "./prompt-builder"
@@ -54,6 +67,7 @@ export function createDelegateTask(options: DelegateTaskToolOptions): ToolDefini
         disabledSkills: options.disabledSkills,
         teamModeEnabled: options.teamModeEnabled,
         directory: options.directory,
+        nativeSkills: options.nativeSkills,
       })
       if (skillError) {
         return skillError
@@ -64,6 +78,7 @@ export function createDelegateTask(options: DelegateTaskToolOptions): ToolDefini
         skillContents,
         availableCategories,
         availableSkills,
+        nativeSkillInfos: await loadNativeSkillInfos(options.nativeSkills),
       })
 
       const parentContext = await resolveParentContext(ctx, options.client)
@@ -136,6 +151,7 @@ export function createDelegateTask(options: DelegateTaskToolOptions): ToolDefini
             model: categoryModel,
             availableCategories,
             availableSkills,
+            nativeSkillInfos: await loadNativeSkillInfos(options.nativeSkills),
           })
           return executeUnstableAgentTask(delegateTaskArgs, ctx, options, parentContext, agentToUse, categoryModel, systemContent, actualModel)
         }
@@ -158,6 +174,7 @@ export function createDelegateTask(options: DelegateTaskToolOptions): ToolDefini
         model: categoryModel,
         availableCategories,
         availableSkills,
+        nativeSkillInfos: await loadNativeSkillInfos(options.nativeSkills),
       })
 
       if (runInBackground) {
