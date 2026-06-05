@@ -41,4 +41,29 @@ describe("applyLayout", () => {
 
     expect(spawnCalls).toEqual([["tmux", "select-layout", "tiled"]])
   })
+
+  it("passes -t targetPaneId to select-layout and set-window-option when provided", async () => {
+    const { applyLayout } = await import("./layout")
+
+    await applyLayout("tmux", "main-vertical", 60, {
+      spawnCommand: spawnMock,
+      targetPaneId: "%5",
+    })
+
+    expect(spawnCalls).toEqual([
+      ["tmux", "select-layout", "-t", "%5", "main-vertical"],
+      ["tmux", "set-window-option", "-t", "%5", "main-pane-width", "60%"],
+    ])
+  })
+
+  it("passes -t targetPaneId to select-layout for non-main layouts", async () => {
+    const { applyLayout } = await import("./layout")
+
+    await applyLayout("tmux", "tiled", 50, {
+      spawnCommand: spawnMock,
+      targetPaneId: "%3",
+    })
+
+    expect(spawnCalls).toEqual([["tmux", "select-layout", "-t", "%3", "tiled"]])
+  })
 })

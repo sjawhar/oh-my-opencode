@@ -12,7 +12,9 @@ export const TmuxConfigSchema = z.object({
   main_pane_size: z.number().min(20).max(80).default(60),
   main_pane_min_width: z.number().min(40).default(120),
   agent_pane_min_width: z.number().min(20).default(40),
-  isolation: TmuxIsolationSchema.default("inline"),
+  // Fork default: full session isolation so agent panes spawn in a detached tmux
+  // session and never split or reflow the user's current window.
+  isolation: TmuxIsolationSchema.default("session"),
 }) satisfies z.ZodType<TmuxConfig>
 
 export type { TmuxConfig, TmuxIsolation, TmuxLayout }
