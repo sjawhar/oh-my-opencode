@@ -449,7 +449,8 @@ Control parallel agent execution and concurrency limits.
     "defaultConcurrency": 5,
     "staleTimeoutMs": 180000,
     "providerConcurrency": { "anthropic": 3, "openai": 5, "google": 10 },
-    "modelConcurrency": { "anthropic/claude-opus-5": 2 }
+    "modelConcurrency": { "anthropic/claude-opus-5": 2 },
+    "wakeOnEachCompletion": false
   }
 }
 ```
@@ -460,6 +461,7 @@ Control parallel agent execution and concurrency limits.
 | `staleTimeoutMs`      | `180000` | Interrupt tasks with no activity (min: 60000)                         |
 | `providerConcurrency` | -        | Per-provider limits (key = provider name)                             |
 | `modelConcurrency`    | -        | Per-model limits (key = `provider/model`). Overrides provider limits. |
+| `wakeOnEachCompletion` | `false` | Wake the parent session after each background task completes. By default the parent is only woken once all of its background tasks finish (or one fails); intermediate results are deposited into the transcript without triggering a turn. |
 
 Priority: `modelConcurrency` > `providerConcurrency` > `defaultConcurrency`
 

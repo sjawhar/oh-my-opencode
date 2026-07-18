@@ -17,6 +17,7 @@ export type PendingParentWake = {
   toolCallDeferralStartedAt?: number
   allowEmptyAssistantTurnRetry?: boolean
   noAssistantOutputRetryCount?: number
+  ledgerId?: string
 }
 
 export function resolveParentWakePromptContext(promptContext: ParentWakePromptContext): ParentWakePromptContext {
@@ -47,6 +48,7 @@ export function cloneParentWake(wake: PendingParentWake): PendingParentWake {
     ...(wake.noAssistantOutputRetryCount !== undefined
       ? { noAssistantOutputRetryCount: wake.noAssistantOutputRetryCount }
       : {}),
+    ...(wake.ledgerId !== undefined ? { ledgerId: wake.ledgerId } : {}),
   }
 }
 
@@ -120,7 +122,7 @@ function isBackgroundTaskProgressNotification(notification: string): boolean {
   }
 
   return notification.split("\n").some((line) =>
-    /^\*\*\d+ tasks? still in progress\.\*\* You WILL be notified when ALL complete\.$/.test(line.trim())
+    /^\*\*\d+ tasks? still in progress\.\*\* You (?:WILL be notified when ALL complete|will be notified as each task completes)\.$/.test(line.trim())
   )
 }
 
@@ -131,7 +133,7 @@ function isBackgroundTaskProgressHeader(line: string): boolean {
     || line === "[BACKGROUND TASK ERROR]"
 }
 
-function getSystemReminderHeaderLines(notification: string): string[] {
+export function getSystemReminderHeaderLines(notification: string): string[] {
   const lines = notification.split("\n")
   const firstContentLineIndex = lines.findIndex((line) => line.trim().length > 0)
   if (firstContentLineIndex === -1) {

@@ -294,3 +294,77 @@ describe("getOrCreateClient env var expansion", () => {
       })
   })
 })
+
+describe("createStdioClient session env", () => {
+  describe("#given a harness that can resolve the session's child environment", () => {
+    it("#when creating the client #then the child receives it", async () => {
+      // given
+      const state = createState()
+      state.resolveSessionEnv = async (sessionID: string) => ({
+        SECRETSD_SESSION_TOKEN_FILE: `/run/secretsd/${sessionID}.token`,
+      })
+      const info = createClientInfo("session-env")
+      const clientKey = createClientKey(info)
+      const config: ClaudeCodeMcpServer = {
+        command: "node",
+        args: ["server.js"],
+      }
+
+      // when
+      await getOrCreateClient({ state, clientKey, info, config })
+
+      // then
+      expect(createdStdioTransports).toHaveLength(1)
+      expect(createdStdioTransports[0]?.options.env?.SECRETSD_SESSION_TOKEN_FILE).toBe(
+        "/run/secretsd/session-env.token"
+      )
+    })
+  })
+
+  describe("#given a declared entry that collides with the resolved session env", () => {
+    it("#when creating the client #then the declared entry wins", async () => {
+      // given
+      const state = createState()
+      state.resolveSessionEnv = async () => ({ SHARED_KEY: "from-session" })
+      const info = createClientInfo("session-env-override")
+      const clientKey = createClientKey(info)
+      const config: ClaudeCodeMcpServer = {
+        command: "node",
+        args: ["server.js"],
+        env: { SHARED_KEY: "from-skill" },
+      }
+
+      // when
+      await getOrCreateClient({ state, clientKey, info, config })
+
+      // then
+      expect(createdStdioTransports[0]?.options.env?.SHARED_KEY).toBe("from-skill")
+    })
+  })
+
+  describe("#given a harness too old to resolve a session's child environment", () => {
+    it("#when creating the client #then the spawn still succeeds", async () => {
+      // given
+      const state = createState()
+      const info = createClientInfo("session-env-absent")
+      const clientKey = createClientKey(info)
+      const config: ClaudeCodeMcpServer = {
+        command: "node",
+        args: ["server.js"],
+      }
+
+      // when
+      await getOrCreateClient({ state, clientKey, info, config })
+
+      // then
+      // Asserted on a name no ambient environment carries: this runner inherits a
+      // real session token, so a realistic name would pass without the resolver.
+      expect(createdStdioTransports).toHaveLength(1)
+      expect(createdStdioTransports[0]?.options.env?.OMO_SESSION_ENV_PROBE).toBeUndefined()
+      // Ambient inheritance still happened. Asserted on the entry count rather
+      // than a named variable: Windows spells PATH as Path, so any specific
+      // name makes this platform-dependent.
+      expect(Object.keys(createdStdioTransports[0]?.options.env ?? {}).length).toBeGreaterThan(0)
+    })
+  })
+})

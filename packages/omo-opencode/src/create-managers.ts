@@ -59,6 +59,17 @@ export type Managers = {
   monitorManager?: MonitorManager
 }
 
+/**
+ * `PluginContext` widened with the optional `sessionEnv` field.
+ *
+ * The pinned `@opencode-ai/plugin` types predate that field, so widening the
+ * real context here is what lets one build run against harnesses that have it
+ * and harnesses that do not.
+ */
+type SessionEnvCapableContext = PluginContext & {
+  sessionEnv?: (input: { sessionID: string; cwd?: string }) => Promise<Record<string, string>>
+}
+
 export function createManagers(args: {
   ctx: PluginContext
   pluginConfig: OhMyOpenCodeConfig
@@ -207,7 +218,16 @@ export function createManagers(args: {
 
   deps.initTaskToastManagerFn(ctx.client)
 
-  const skillMcpManager = new deps.SkillMcpManagerClass()
+  // Read defensively: `sessionEnv` postdates the oldest OpenCode this plugin
+  // supports, and an older harness simply cannot say what a session's children
+  // should inherit, so skill MCPs keep the environment they had before.
+  const harness: SessionEnvCapableContext = ctx
+  const sessionEnv = harness.sessionEnv
+  const skillMcpManager = new deps.SkillMcpManagerClass({
+    resolveSessionEnv: sessionEnv
+      ? (sessionID: string) => sessionEnv({ sessionID, cwd: ctx.directory })
+      : undefined,
+  })
 
   const configHandler = deps.createConfigHandlerFn({
     ctx: { directory: ctx.directory, client: ctx.client },

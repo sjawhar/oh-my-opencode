@@ -16,10 +16,10 @@ describe("TmuxIsolationSchema", () => {
 
 describe("TmuxConfigSchema", () => {
   describe('#given tmux isolation is omitted', () => {
-    test('#when parsed #then default isolation is inline', () => {
+    test('#when parsed #then default isolation is session', () => {
       const result = TmuxConfigSchema.parse({})
 
-      expect(result.isolation).toBe("inline")
+      expect(result.isolation).toBe("session")
     })
   })
 })

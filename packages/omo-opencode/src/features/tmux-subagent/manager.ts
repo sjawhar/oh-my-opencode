@@ -17,7 +17,7 @@ import {
 } from "../../shared/tmux"
 import { queryWindowState as defaultQueryWindowState } from "./pane-state-querier"
 import { decideSpawnActions, decideCloseAction, type SessionMapping } from "./decision-engine"
-import { executeActions, executeAction } from "./action-executor"
+import { executeActions, executeAction, enforceLayoutAndMainPane } from "./action-executor"
 import { TmuxPollingManager } from "./polling-manager"
 import { createTrackedSession, markTrackedSessionClosePending } from "./tracked-session-state"
 import { isCmuxCompatEnvironment } from "../../shared/tmux/cmux-detect"
@@ -26,7 +26,7 @@ import { isAttachableSessionStatus } from "./attachable-session-status"
 import { parseSessionStatusResponse } from "./session-status-parser"
 import { FailedReadinessCache, type FailedReadinessSessionSeed } from "./failed-readiness-cache"
 import { resolveServerUrl } from "./resolve-server-url"
-import { sweepStaleTmuxResources } from "./stale-tmux-resource-sweeper"
+import { sweepStaleTmuxResources, type StaleTmuxResourceSweepReport } from "./stale-tmux-resource-sweeper"
 type OpencodeClient = PluginInput["client"]
 
 type SpawnStage =
@@ -54,6 +54,7 @@ export interface TmuxUtilDeps {
   waitForSessionReady: (params: { client: OpencodeClient; sessionId: string }) => Promise<boolean>
   executeActions: typeof executeActions
   executeAction: typeof executeAction
+  enforceLayoutAndMainPane: typeof enforceLayoutAndMainPane
   log: typeof sharedModule.log
 }
 
@@ -83,6 +84,7 @@ const defaultTmuxDeps: TmuxUtilDeps = {
   waitForSessionReady,
   executeActions,
   executeAction,
+  enforceLayoutAndMainPane,
   log: sharedModule.log,
 }
 
@@ -332,7 +334,10 @@ export class TmuxSessionManager {
           directory: this.projectDirectory,
           serverUrl: this.serverUrl,
           windowState: state,
-          sourcePaneId: this.sourcePaneId ?? tracked.paneId,
+          // Tearing down the isolated container must NOT re-enforce a layout on the
+          // user's window. Passing no source pane keeps any post-close enforcement
+          // scoped to the (dying) isolated window instead of `this.sourcePaneId`.
+          sourcePaneId: undefined,
         },
       )
 
@@ -1020,6 +1025,18 @@ export class TmuxSessionManager {
         }
       }
 
+      // In isolation modes the agent pane belongs to the detached container, never
+      // the user's window. If the isolated container is not (yet) available, do NOT
+      // fall through to splitting the user's source pane (`getEffectiveSourcePaneId`
+      // resolves to it while `isolatedWindowPaneId` is unset). Keep the session
+      // deferred so a later tick retries the isolated container.
+      if (this.isIsolated() && !this.isolatedWindowPaneId) {
+        this.deps.log("[tmux-session-manager] deferred isolated container unavailable, keeping session deferred", {
+          sessionId,
+        })
+        return
+      }
+
       const effectiveSourcePaneId = this.getEffectiveSourcePaneId()
       if (!effectiveSourcePaneId) return
 
@@ -1122,7 +1139,35 @@ export class TmuxSessionManager {
     const sessionId = resolveSessionEventID(event.properties)
     if (!sessionId || !info?.parentID) return
 
-    await this.sweepStaleIsolatedSessionsOnce()
+    // A stale `omo-subagent-`/`omo-team-` attach pane killed by the sweep makes
+    // tmux reflow that pane's window. The normal spawn/close paths re-impose the
+    // targeted layout, but team-mode/skipped sessions return before reaching them,
+    // so re-enforce the source window here whenever the sweep closed attach panes.
+    // Isolation modes ("window"/"session") keep agent panes out of the user's
+    // current window, so re-enforcing the user's layout there would reflow a window
+    // we must never touch; restrict this repair to inline mode.
+    const sweepReport = await this.sweepStaleIsolatedSessionsOnce()
+
+    if (
+      !this.isIsolated() &&
+      sweepReport &&
+      sweepReport.killedAttachPanes > 0 &&
+      this.sourcePaneId
+    ) {
+      const sourceState = await this.deps.queryWindowState(this.sourcePaneId).catch(() => null)
+      if (sourceState) {
+        this.deps.log("[tmux-session-manager] re-enforcing layout after stale sweep closed attach panes", {
+          killedAttachPanes: sweepReport.killedAttachPanes,
+        })
+        await this.deps.enforceLayoutAndMainPane({
+          config: this.tmuxConfig,
+          directory: this.projectDirectory,
+          serverUrl: this.serverUrl,
+          windowState: sourceState,
+          sourcePaneId: this.sourcePaneId,
+        })
+      }
+    }
 
     // Team-mode members live in `team-layout-tmux` (which owns the pane
     // lifecycle via runtimeState.tmuxLayout). Tracking them here as well
@@ -1359,9 +1404,9 @@ export class TmuxSessionManager {
     this.deps.log("[tmux-session-manager] cleanup complete")
   }
 
-  private async sweepStaleIsolatedSessionsOnce(): Promise<void> {
-    if (this.staleSweepCompleted) return
-    if (this.staleSweepInProgress) return
+  private async sweepStaleIsolatedSessionsOnce(): Promise<StaleTmuxResourceSweepReport | null> {
+    if (this.staleSweepCompleted) return null
+    if (this.staleSweepInProgress) return null
 
     this.staleSweepInProgress = true
     try {
@@ -1378,10 +1423,12 @@ export class TmuxSessionManager {
         })
       }
       this.staleSweepCompleted = true
+      return report
     } catch (error) {
       this.deps.log("[tmux-session-manager] stale sweep failed", {
         error: String(error),
       })
+      return null
     } finally {
       this.staleSweepInProgress = false
     }

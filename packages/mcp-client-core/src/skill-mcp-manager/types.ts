@@ -73,6 +73,14 @@ export type OAuthProviderFactory = (options: {
   scopes?: string[]
 }) => OAuthProviderLike
 
+/**
+ * Resolve the environment a session's child processes should receive.
+ *
+ * Supplied by the harness adapter. A bare callback keeps this package
+ * harness-neutral: nothing here knows which harness answers, or how.
+ */
+export type SessionEnvResolver = (sessionID: string) => Promise<Record<string, string>>
+
 export interface SkillMcpManagerState {
   clients: Map<string, ManagedClient>
   pendingConnections: Map<string, Promise<McpClient>>
@@ -86,6 +94,7 @@ export interface SkillMcpManagerState {
   inFlightConnections: Map<string, number>
   disposed: boolean
   createOAuthProvider: OAuthProviderFactory
+  resolveSessionEnv?: SessionEnvResolver
 }
 
 export interface SkillMcpClientConnectionParams {

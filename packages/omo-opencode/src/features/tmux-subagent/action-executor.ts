@@ -40,7 +40,7 @@ async function enforceMainPane(
   })
 }
 
-async function enforceLayoutAndMainPane(ctx: ExecuteContext): Promise<void> {
+export async function enforceLayoutAndMainPane(ctx: ExecuteContext): Promise<void> {
   const sourcePaneId = ctx.sourcePaneId
   if (!sourcePaneId) {
     await enforceMainPane(ctx.windowState, ctx.config)
@@ -53,10 +53,12 @@ async function enforceLayoutAndMainPane(ctx: ExecuteContext): Promise<void> {
     return
   }
 
-  const tmux = await getTmuxPath()
-  if (tmux) {
-    await applyLayout(tmux, ctx.config.layout, ctx.config.main_pane_size)
-  }
+	const tmux = await getTmuxPath()
+	if (tmux) {
+		await applyLayout(tmux, ctx.config.layout, ctx.config.main_pane_size, {
+			targetPaneId: sourcePaneId,
+		})
+	}
 
   await enforceMainPane(latestState, ctx.config)
 }

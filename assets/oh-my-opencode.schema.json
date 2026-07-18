@@ -6263,6 +6263,9 @@
           "minimum": 10,
           "maximum": 9007199254740991
         },
+        "wakeOnEachCompletion": {
+          "type": "boolean"
+        },
         "circuitBreaker": {
           "type": "object",
           "properties": {
@@ -6817,7 +6820,7 @@
           "minimum": 20
         },
         "isolation": {
-          "default": "inline",
+          "default": "session",
           "type": "string",
           "enum": [
             "inline",

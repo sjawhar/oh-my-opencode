@@ -63,6 +63,7 @@ const mockExecuteAction = mock<(
   action: PaneAction,
   ctx: ExecuteContext
 ) => Promise<ActionResult>>(async () => ({ success: true }))
+const mockEnforceLayoutAndMainPane = mock<(ctx: ExecuteContext) => Promise<void>>(async () => {})
 const mockSpawnTmuxPane = mock(async (_sessionId?: string) => ({
   success: true,
   paneId: '%mock',
@@ -102,6 +103,7 @@ const mockTmuxDeps: TmuxUtilDeps = {
   waitForSessionReady: mockWaitForSessionReady,
   executeActions: mockExecuteActions,
   executeAction: mockExecuteAction,
+  enforceLayoutAndMainPane: mockEnforceLayoutAndMainPane,
   log: (...args) => sharedModule.log(...args),
 }
 
@@ -110,6 +112,7 @@ function registerModuleMocks(): void {
     executeActions: mockExecuteActions,
     executeAction: mockExecuteAction,
     executeActionWithDeps: mockExecuteAction,
+    enforceLayoutAndMainPane: mockEnforceLayoutAndMainPane,
   }))
 
   mock.module('./session-ready-waiter', () => ({
@@ -666,7 +669,7 @@ describe('TmuxSessionManager', () => {
       // given
       mockSweepStaleOmoAgentSessions.mockClear()
       mockSweepStaleOmoAttachPanes.mockClear()
-      mockSweepStaleOmoAttachPanes.mockImplementation(async () => 1)
+      mockSweepStaleOmoAttachPanes.mockImplementation(async () => 0)
       mockIsInsideTmux.mockReturnValue(true)
 
       const { TmuxSessionManager } = await import('./manager')
@@ -686,6 +689,82 @@ describe('TmuxSessionManager', () => {
       expect(mockSweepStaleOmoAgentSessions).toHaveBeenCalledTimes(0)
       expect(mockQueryWindowState).not.toHaveBeenCalled()
       expect(mockExecuteActions).not.toHaveBeenCalled()
+    })
+
+    test('#given the stale sweep closes attach panes #when onSessionCreated runs #then the source layout is re-enforced even for skipped sessions', async () => {
+      // given
+      mockSweepStaleOmoAgentSessions.mockClear()
+      mockSweepStaleOmoAttachPanes.mockClear()
+      mockEnforceLayoutAndMainPane.mockClear()
+      mockSweepStaleOmoAttachPanes.mockImplementation(async () => 1)
+      mockIsInsideTmux.mockReturnValue(true)
+      mockQueryWindowState.mockImplementation(async () => createWindowState())
+
+      const { TmuxSessionManager } = await import('./manager')
+      const manager = new TmuxSessionManager(createMockContext(), createTmuxConfig({
+        enabled: true,
+        isolation: 'inline',
+      }), mockTmuxDeps, {
+        shouldSkipSession: (sessionId) => sessionId.startsWith('ses_team_member'),
+      })
+
+      // when - a skipped team-mode session fires and the sweep killed an attach pane
+      await manager.onSessionCreated(createSessionCreatedEvent('ses_team_member', 'ses_parent', 'team member task'))
+
+      // then - the source window layout is repaired with the source pane targeted,
+      // even though the session itself is skipped before any spawn.
+      expect(mockEnforceLayoutAndMainPane).toHaveBeenCalledTimes(1)
+      const enforceCtx = mockEnforceLayoutAndMainPane.mock.calls[0]![0]
+      expect(enforceCtx.sourcePaneId).toBe('%0')
+    })
+
+    test('#given the stale sweep closes no attach panes #when onSessionCreated runs #then the layout is not re-enforced', async () => {
+      // given
+      mockSweepStaleOmoAttachPanes.mockClear()
+      mockEnforceLayoutAndMainPane.mockClear()
+      mockSweepStaleOmoAttachPanes.mockImplementation(async () => 0)
+      mockIsInsideTmux.mockReturnValue(true)
+      mockQueryWindowState.mockImplementation(async () => createWindowState())
+
+      const { TmuxSessionManager } = await import('./manager')
+      const manager = new TmuxSessionManager(createMockContext(), createTmuxConfig({
+        enabled: true,
+        isolation: 'inline',
+      }), mockTmuxDeps, {
+        shouldSkipSession: (sessionId) => sessionId.startsWith('ses_team_member'),
+      })
+
+      // when
+      await manager.onSessionCreated(createSessionCreatedEvent('ses_team_member', 'ses_parent', 'team member task'))
+
+      // then
+      expect(mockEnforceLayoutAndMainPane).not.toHaveBeenCalled()
+    })
+
+    test('#given session isolation and the stale sweep closes attach panes #when onSessionCreated runs #then the user window layout is NOT re-enforced', async () => {
+      // given - in session isolation the swept stale panes live in the detached
+      // omo-agents session, so re-enforcing the user's layout would reflow a window
+      // that isolation must never touch.
+      mockSweepStaleOmoAgentSessions.mockClear()
+      mockSweepStaleOmoAttachPanes.mockClear()
+      mockEnforceLayoutAndMainPane.mockClear()
+      mockSweepStaleOmoAttachPanes.mockImplementationOnce(async () => 1)
+      mockIsInsideTmux.mockReturnValue(true)
+      mockQueryWindowState.mockImplementation(async () => createWindowState())
+
+      const { TmuxSessionManager } = await import('./manager')
+      const manager = new TmuxSessionManager(createMockContext(), createTmuxConfig({
+        enabled: true,
+        isolation: 'session',
+      }), mockTmuxDeps, {
+        shouldSkipSession: (sessionId) => sessionId.startsWith('ses_team_member'),
+      })
+
+      // when - a skipped team-mode session fires and the sweep killed an attach pane
+      await manager.onSessionCreated(createSessionCreatedEvent('ses_team_member', 'ses_parent', 'team member task'))
+
+      // then - the user's current window layout is left untouched in isolation mode
+      expect(mockEnforceLayoutAndMainPane).not.toHaveBeenCalled()
     })
 
     test('second agent spawns with correct split direction', async () => {
@@ -1470,7 +1549,7 @@ describe('TmuxSessionManager', () => {
         logSpy.mockRestore()
       })
 
-      test('#given an isolated session deferred after container spawn failure #when deferred attach retries #then it re-attempts isolated container creation before normal pane fallback', async () => {
+      test('#given an isolated session deferred after container spawn failure #when deferred attach retries and the container still fails #then it stays deferred without splitting the user window', async () => {
         // given
         mockIsInsideTmux.mockReturnValue(true)
         mockSpawnTmuxSession.mockImplementation(async () => ({
@@ -1498,8 +1577,11 @@ describe('TmuxSessionManager', () => {
 
         // then
         expect(mockSpawnTmuxSession).toHaveBeenCalledTimes(2)
-        expect(mockExecuteActions).toHaveBeenCalledTimes(1)
-        expect(mockExecuteActions.mock.calls[0]?.[1]?.sourcePaneId).toBe('%0')
+        // Isolation must NEVER fall back to splitting the user's window. With no
+        // isolated container available the deferred session stays queued for a later
+        // retry instead of spawning an inline pane on the user's source pane (%0).
+        expect(mockExecuteActions).not.toHaveBeenCalled()
+        expect(Reflect.get(manager, 'deferredQueue')).toEqual(['ses_isolated_retry'])
       })
 
       test('#given queryWindowState returns null #when onSessionCreated fires #then session is enqueued in deferred queue', async () => {
@@ -2101,6 +2183,9 @@ describe('TmuxSessionManager', () => {
         paneId: '%isolated-session-ses_first',
         sessionId: 'ses_first',
       })
+      // Tearing down the isolated container must not target the user's source pane
+      // for layout enforcement, or it would reflow the user's window on close.
+      expect(mockExecuteAction.mock.calls[0]?.[1]?.sourcePaneId).toBeUndefined()
       expect(Reflect.get(manager, 'isolatedContainerPaneId')).toBeUndefined()
       expect(Reflect.get(manager, 'isolatedWindowPaneId')).toBeUndefined()
     })
