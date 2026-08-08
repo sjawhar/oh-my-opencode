@@ -4,7 +4,14 @@ import type { ClaudeCodeMcpServer } from "@oh-my-opencode/claude-code-compat-cor
 import { createCleanMcpEnvironment } from "./env-cleaner"
 import { registerProcessCleanup, startCleanupTimer } from "./cleanup"
 import { redactSensitiveData } from "./error-redaction"
-import type { ManagedClient, McpClient, McpTransport, SkillMcpClientConnectionParams } from "./types"
+import type {
+  ManagedClient,
+  McpClient,
+  McpTransport,
+  SkillMcpClientConnectionParams,
+  SkillMcpClientInfo,
+  SkillMcpManagerState,
+} from "./types"
 import { log } from "../logger"
 
 type StdioClientFactory = (
@@ -61,13 +68,36 @@ async function closeStdioResourceIgnoringFailure(
   }
 }
 
+/**
+ * Ask the harness for this session's child-process environment.
+ *
+ * An absent resolver is a harness that cannot answer, which is the behavior
+ * every release before this one had; a resolver that throws is a harness that
+ * should have been able to answer and could not, so that surfaces rather than
+ * quietly spawning a server stripped of its session.
+ */
+async function resolveSessionEnv(
+  state: SkillMcpManagerState,
+  info: SkillMcpClientInfo
+): Promise<Record<string, string>> {
+  if (!state.resolveSessionEnv) {
+    return {}
+  }
+  return await state.resolveSessionEnv(info.sessionID)
+}
+
 export async function createStdioClient(params: SkillMcpClientConnectionParams): Promise<McpClient> {
   const { state, clientKey, info, config } = params
   const shutdownGenAtStart = state.shutdownGeneration
 
   const command = getStdioCommand(config, info.serverName)
   const args = config.args ?? []
-  const mergedEnv = createCleanMcpEnvironment(config.env)
+  // A skill MCP is a session-owned child process, but an inherited process
+  // environment belongs to the server and names no session, so session-scoped
+  // credential helpers cannot resolve their scope inside one. Ask the harness
+  // what this session's children should get. Declared entries still win.
+  const sessionEnv = await resolveSessionEnv(state, info)
+  const mergedEnv = createCleanMcpEnvironment({ ...sessionEnv, ...config.env })
 
   registerProcessCleanup(state)
 

@@ -7,6 +7,7 @@ import { handlePostRequestAuthError, handleStepUpIfNeeded } from "./oauth-handle
 import type {
   McpClient,
   OAuthProviderFactory,
+  SessionEnvResolver,
   SkillMcpClientInfo,
   SkillMcpManagerState,
   SkillMcpServerContext,
@@ -41,7 +42,9 @@ function withInjectedCdpEndpoint(
 export class SkillMcpManager {
   private readonly state: SkillMcpManagerState
 
-  constructor(options: { createOAuthProvider?: OAuthProviderFactory } = {}) {
+  constructor(
+    options: { createOAuthProvider?: OAuthProviderFactory; resolveSessionEnv?: SessionEnvResolver } = {}
+  ) {
     this.state = {
       clients: new Map(),
       pendingConnections: new Map(),
@@ -55,6 +58,7 @@ export class SkillMcpManager {
       inFlightConnections: new Map(),
       disposed: false,
       createOAuthProvider: options.createOAuthProvider ?? ((providerOptions) => new McpOAuthProvider(providerOptions)),
+      resolveSessionEnv: options.resolveSessionEnv,
     }
   }
 
